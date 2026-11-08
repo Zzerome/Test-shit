@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.SoundPool
 import android.os.Build
@@ -21,14 +23,7 @@ import android.view.WindowInsetsController
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.PI
-import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.exp
-import kotlin.math.floor
-import kotlin.math.min
-import kotlin.math.sin
+import kotlin.math.*
 
 class MainActivity : Activity() {
     private lateinit var dial: DialView
@@ -71,8 +66,7 @@ class DialView(context: Context) : View(context), Choreographer.FrameCallback {
     companion object {
         private const val TICKS = 60
         private const val STEP = 360f / TICKS     // 6 degrees between ticks
-        private const val MAX_TURNS = 10          // gauge range: -10..+10 turns
-        private const val GAUGE_SPAN = 100f       // gauge half-angle, degrees
+        private const val DRUMS = 5               // digit drums in the counter
         private const val FRICTION = 0.0020f      // bigger = brakes faster
         private const val MIN_CLICK_GAP_MS = 22L
     }
@@ -93,15 +87,29 @@ class DialView(context: Context) : View(context), Choreographer.FrameCallback {
         color = Color.WHITE
         style = Paint.Style.FILL
     }
+    private val black = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.FILL
+    }
+    private val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+    }
+    private val digit = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+    }
+    private val rect = RectF()
 
     private var dialCx = 0f
     private var dialCy = 0f
     private var dialR = 0f
-    private var gaugeCx = 0f
-    private var gaugeCy = 0f
-    private var gaugeR = 0f
+    private var counterCy = 0f
+    private var cellW = 0f
+    private var cellH = 0f
 
-    private var dialAngle = 0f        // total degrees, clockwise = plus
+    private var dialAngle = 0f        // total degrees of the big hand, clockwise = plus
     private var lastTouchAngle = 0f
     private var velocity = 0f         // degrees per ms
     private var lastMoveTime = 0L
@@ -145,26 +153,18 @@ class DialView(context: Context) : View(context), Choreographer.FrameCallback {
         dialR = min(wf * 0.42f, hf * 0.27f)
         dialCx = wf / 2f
         dialCy = hf * 0.63f
-        gaugeR = min(wf * 0.32f, hf * 0.16f)
-        gaugeCx = wf / 2f
-        gaugeCy = hf * 0.25f
+        cellW = min(wf * 0.13f, hf * 0.07f)
+        cellH = cellW * 1.55f
+        counterCy = hf * 0.25f
+        digit.textSize = cellH * 0.62f
     }
 
-    // ---------- drawing ----------
+    // ---------- drawing primitives ----------
 
-    // deg: 0 = up, clockwise = plus
-    private fun tick(
-        canvas: Canvas, cx: Float, cy: Float, deg: Float,
-        r1: Float, r2: Float, w: Float, a: Int = 255
+    // line with a soft glow
+    private fun seg(
+        canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, w: Float, a: Int
     ) {
-        val rad = Math.toRadians(deg.toDouble())
-        val s = sin(rad).toFloat()
-        val c = cos(rad).toFloat()
-        val x1 = cx + r1 * s
-        val y1 = cy - r1 * c
-        val x2 = cx + r2 * s
-        val y2 = cy - r2 * c
-
         glow.strokeWidth = w * 4.5f
         glow.alpha = (a * 0.10f).toInt()
         canvas.drawLine(x1, y1, x2, y2, glow)
@@ -176,45 +176,124 @@ class DialView(context: Context) : View(context), Choreographer.FrameCallback {
         canvas.drawLine(x1, y1, x2, y2, core)
     }
 
-    override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(Color.BLACK)
-        drawGauge(canvas)
-        drawDial(canvas)
+    // radial line: deg 0 = up, clockwise = plus; r1 may be negative (tail of a hand)
+    private fun tick(
+        canvas: Canvas, cx: Float, cy: Float, deg: Float,
+        r1: Float, r2: Float, w: Float, a: Int = 255
+    ) {
+        val rad = Math.toRadians(deg.toDouble())
+        val s = sin(rad).toFloat()
+        val c = cos(rad).toFloat()
+        seg(canvas, cx + r1 * s, cy - r1 * c, cx + r2 * s, cy - r2 * c, w, a)
     }
 
-    private fun drawDial(canvas: Canvas) {
+    override fun onDraw(canvas: Canvas) {
+        canvas.drawColor(Color.BLACK)
+        drawCounter(canvas)
+        drawClock(canvas)
+    }
+
+    // ---------- clock: fixed ticks, rotating hands ----------
+
+    private fun drawClock(canvas: Canvas) {
         for (i in 0 until TICKS) {
+            val quarter = i % 15 == 0
             val major = i % 5 == 0
-            val len = dialR * (if (major) 0.17f else 0.09f)
-            val w = dp * (if (major) 3.2f else 1.8f)
+            val len = dialR * (if (quarter) 0.22f else if (major) 0.17f else 0.09f)
+            val w = dp * (if (quarter) 4.0f else if (major) 3.2f else 1.8f)
             tick(
-                canvas, dialCx, dialCy, dialAngle + i * STEP,
+                canvas, dialCx, dialCy, i * STEP,
                 dialR - len, dialR, w, if (major) 255 else 170
             )
         }
-        // fixed pointer at the top
-        tick(canvas, dialCx, dialCy, 0f, dialR * 1.07f, dialR * 1.17f, dp * 3.2f)
-    }
-
-    private fun drawGauge(canvas: Canvas) {
-        for (k in -MAX_TURNS..MAX_TURNS) {
-            val deg = k * GAUGE_SPAN / MAX_TURNS
-            val major = k % 5 == 0
-            val len = gaugeR * (if (k == 0) 0.20f else if (major) 0.15f else 0.08f)
-            val w = dp * (if (major) 2.6f else 1.5f)
-            tick(
-                canvas, gaugeCx, gaugeCy, deg,
-                gaugeR - len, gaugeR, w, if (major) 255 else 150
-            )
-        }
-        val turns = (dialAngle / 360f).coerceIn(-MAX_TURNS.toFloat(), MAX_TURNS.toFloat())
-        val needleDeg = turns * GAUGE_SPAN / MAX_TURNS
-        tick(canvas, gaugeCx, gaugeCy, needleDeg, gaugeR * 0.12f, gaugeR * 0.80f, dp * 2.4f)
+        // small (hour) hand: 12x slower than the big one
+        tick(canvas, dialCx, dialCy, dialAngle / 12f, -dialR * 0.10f, dialR * 0.55f, dp * 5.5f)
+        // big (minute) hand: follows the finger
+        tick(canvas, dialCx, dialCy, dialAngle, -dialR * 0.14f, dialR * 0.86f, dp * 3.0f)
 
         fill.alpha = 30
-        canvas.drawCircle(gaugeCx, gaugeCy, dp * 9f, fill)
+        canvas.drawCircle(dialCx, dialCy, dp * 11f, fill)
         fill.alpha = 255
-        canvas.drawCircle(gaugeCx, gaugeCy, dp * 4.5f, fill)
+        canvas.drawCircle(dialCx, dialCy, dp * 6f, fill)
+        canvas.drawCircle(dialCx, dialCy, dp * 2f, black)
+    }
+
+    // ---------- counter: odometer / water meter drums ----------
+
+    private fun drawCounter(canvas: Canvas) {
+        // value in tenths of a turn, always positive (minus is drawn separately)
+        val x0 = (abs(dialAngle.toDouble()) / 360.0 * 10.0) % 100000.0
+
+        // drum positions (0..10): the last drum rolls smoothly,
+        // each next one rolls only while all drums to its right go 9 -> 0
+        val pos = DoubleArray(DRUMS)
+        var s = x0 - floor(x0)
+        var prev = floor(x0).toLong() % 10
+        pos[0] = prev + s
+        for (i in 1 until DRUMS) {
+            val di = floor(x0 / 10.0.pow(i)).toLong() % 10
+            s = if (prev == 9L) s else 0.0
+            pos[i] = di + s
+            prev = di
+        }
+
+        val gap = dp * 6f
+        val dotGap = cellW * 0.4f
+        val totalW = DRUMS * cellW + (DRUMS - 2) * gap + dotGap
+        val startX = dialCx - totalW / 2f
+        val top = counterCy - cellH / 2f
+
+        if (dialAngle < 0f) {
+            seg(canvas, startX - gap - cellW * 0.55f, counterCy, startX - gap, counterCy, dp * 3f, 255)
+        }
+
+        var x = startX
+        for (k in 0 until DRUMS) {
+            val i = DRUMS - 1 - k
+            drawDrum(canvas, x, top, pos[i], i == 0)
+            x += cellW
+            if (i == 1) {
+                fill.alpha = 255
+                canvas.drawCircle(x + dotGap / 2f, counterCy + cellH * 0.28f, dp * 2.2f, fill)
+                x += dotGap
+            } else {
+                x += gap
+            }
+        }
+    }
+
+    private fun drawDrum(canvas: Canvas, left: Float, top: Float, pos: Double, inverted: Boolean) {
+        rect.set(left, top, left + cellW, top + cellH)
+        val radius = dp * 4f
+        if (inverted) {
+            fill.alpha = 255
+            canvas.drawRoundRect(rect, radius, radius, fill)
+        } else {
+            frame.strokeWidth = dp * 1.6f
+            frame.alpha = 200
+            canvas.drawRoundRect(rect, radius, radius, frame)
+        }
+
+        canvas.save()
+        canvas.clipRect(rect)
+        val base = floor(pos).toInt()
+        val frac = (pos - floor(pos)).toFloat()
+        val cy = top + cellH / 2f
+        val step = cellH * 0.95f
+        digit.color = if (inverted) Color.BLACK else Color.WHITE
+        if (inverted) {
+            digit.clearShadowLayer()
+        } else {
+            digit.setShadowLayer(dp * 5f, 0f, 0f, Color.argb(136, 255, 255, 255))
+        }
+        for (j in -1..2) {
+            val n = ((base + j) % 10 + 10) % 10
+            val dist = abs(j - frac)
+            digit.alpha = (255f * (1f - dist * 0.85f)).coerceIn(0f, 255f).toInt()
+            val y = cy + (j - frac) * step + digit.textSize * 0.36f
+            canvas.drawText(n.toString(), left + cellW / 2f, y, digit)
+        }
+        canvas.restore()
     }
 
     // ---------- touch ----------
