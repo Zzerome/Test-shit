@@ -8,11 +8,11 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.dial"
-        minSdk = 24
+        applicationId = "com.example.dial3"
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "3.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
